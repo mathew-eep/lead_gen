@@ -1,0 +1,4 @@
+requests==2.31.0
+python-dotenv==1.0.0
+schedule==1.2.0
+sqlite3-python==1.0.0

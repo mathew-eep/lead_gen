@@ -1,0 +1,116 @@
+"""Long-running compliant lead collector."""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Optional
+
+import schedule
+
+from lead_database import LeadDatabase
+from lead_scraper import TopicLeadScraper
+
+
+def setup_lead_logging(log_file: Optional[str] = None) -> None:
+    log_level = os.getenv("LEAD_LOG_LEVEL", "INFO")
+    fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    handlers = [logging.StreamHandler()]
+    if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
+    logging.basicConfig(level=getattr(logging, log_level), format=fmt, handlers=handlers)
+
+
+class LeadCollector:
+    """Continuously collect business contacts related to a topic."""
+
+    def __init__(
+        self,
+        topic: str,
+        db_path: str = "./data/leads.db",
+        run_every_minutes: int = 30,
+        max_sites_per_run: int = 20,
+    ) -> None:
+        self.topic = topic
+        self.run_every_minutes = run_every_minutes
+        self.max_sites_per_run = max_sites_per_run
+
+        self.db = LeadDatabase(db_path=db_path)
+        self.scraper = TopicLeadScraper()
+        self.logger = logging.getLogger(__name__)
+
+    def run_once(self) -> None:
+        run_id = self.db.start_run(self.topic)
+        companies_added = 0
+        contacts_added = 0
+
+        try:
+            sites = self.scraper.discover_websites(self.topic, max_sites=self.max_sites_per_run)
+
+            for site in sites:
+                if self.db.add_company(
+                    topic=self.topic,
+                    website=site.website,
+                    name=None,
+                    source_url=site.source_url,
+                ):
+                    companies_added += 1
+
+                findings = self.scraper.scrape_business_contacts(site.website)
+                for finding in findings:
+                    added = self.db.add_contact(
+                        company_website=site.website,
+                        email=finding.email,
+                        contact_type=finding.contact_type,
+                        source_url=finding.source_url,
+                        confidence=finding.confidence,
+                    )
+                    if added:
+                        contacts_added += 1
+
+            self.db.finish_run(
+                run_id,
+                companies_found=companies_added,
+                contacts_found=contacts_added,
+                status="success",
+            )
+            self.logger.info(
+                "Run complete | topic='%s' new_companies=%d new_contacts=%d",
+                self.topic,
+                companies_added,
+                contacts_added,
+            )
+        except Exception as exc:
+            self.db.finish_run(
+                run_id,
+                companies_found=companies_added,
+                contacts_found=contacts_added,
+                status="failed",
+                notes=str(exc),
+            )
+            self.logger.error("Run failed: %s", exc)
+
+    def start_forever(self) -> None:
+        self.logger.info("Starting lead collector for topic '%s'", self.topic)
+        self.logger.info(
+            "Schedule: every %d minute(s), max %d sites/run",
+            self.run_every_minutes,
+            self.max_sites_per_run,
+        )
+
+        schedule.every(self.run_every_minutes).minutes.do(self.run_once)
+        self.run_once()
+
+        try:
+            while True:
+                schedule.run_pending()
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.logger.info("Lead collector stopped")
+
+    def print_stats(self) -> None:
+        stats = self.db.get_stats()
+        self.logger.info("Lead DB stats: %s", stats)
