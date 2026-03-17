@@ -43,9 +43,7 @@ class LeadDatabase:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     company_website TEXT NOT NULL,
                     email TEXT NOT NULL,
-                    contact_type TEXT NOT NULL,
                     source_url TEXT NOT NULL,
-                    confidence REAL DEFAULT 0.5,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(company_website, email)
                 )
@@ -102,20 +100,32 @@ class LeadDatabase:
         self,
         company_website: str,
         email: str,
-        contact_type: str,
         source_url: str,
-        confidence: float = 0.5,
     ) -> bool:
         try:
             with sqlite3.connect(self.db_path) as conn:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO contacts (
-                        company_website, email, contact_type, source_url, confidence
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (company_website, email.lower(), contact_type, source_url, confidence),
-                )
+                # If table already existed with old schema, columns might still be there but not required.
+                # However, since we removed the columns in the CREATE statement, we just insert into the core 3.
+                try:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO contacts (
+                            company_website, email, source_url
+                        ) VALUES (?, ?, ?)
+                        """,
+                        (company_website, email.lower(), source_url),
+                    )
+                except sqlite3.OperationalError:
+                    # Fallback for if the old schema still exists in the local database file and requires 'contact_type'
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO contacts (
+                            company_website, email, contact_type, source_url, confidence
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (company_website, email.lower(), "general", source_url, 1.0),
+                    )
+                
                 conn.commit()
                 return conn.total_changes > 0
         except Exception as exc:

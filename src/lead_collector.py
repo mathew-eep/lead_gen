@@ -64,9 +64,7 @@ class LeadCollector:
                     added = self.db.add_contact(
                         company_website=site.website,
                         email=finding.email,
-                        contact_type=finding.contact_type,
                         source_url=finding.source_url,
-                        confidence=finding.confidence,
                     )
                     if added:
                         contacts_added += 1
