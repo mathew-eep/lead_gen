@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Iterable, List, Set
+from typing import Iterable, List, Set, Tuple
 from urllib.parse import quote_plus, urljoin, urlparse
 
 import requests
@@ -45,10 +45,23 @@ class TopicLeadScraper:
 
     def discover_websites(self, topic: str, max_sites: int = 25) -> List[CandidateSite]:
         """Use a search engine to find topical public websites."""
-        # Using Yahoo search for better compatibility with automated scrapers
-        query = f"{topic} company official site"
-        url = f"https://search.yahoo.com/search?p={quote_plus(query)}&n={max_sites + 10}"
-        logger.info("Searching for topic websites: %s", topic)
+        import random
+
+        # Introduce variety in the search query to pull different results per run
+        query_variants = [
+            f'"{topic}" company official site',
+            f'{topic} businesses "contact us"',
+            f'"{topic}" services agency',
+            f'top {topic} companies',
+            f'{topic} firm "about us"'
+        ]
+
+        # We can also paginate randomly through the first 50 results (b parameter in Yahoo)
+        random_page_offset = random.choice([1, 11, 21, 31, 41])
+        chosen_query = random.choice(query_variants)
+
+        url = f"https://search.yahoo.com/search?p={quote_plus(chosen_query)}&n={max_sites + 10}&b={random_page_offset}"
+        logger.info("Searching for topic websites: %s (Query: '%s', Offset: %d)", topic, chosen_query, random_page_offset)
 
         try:
             res = self.session.get(url, timeout=self.timeout)
@@ -65,7 +78,7 @@ class TopicLeadScraper:
 
         for link in soup.select(".algo a"):
             href = link.get("href", "").strip()
-            
+
             # Yahoo wraps links in a redirect (e.g., .../RU=https%3a%2f%2f.../RK=...)
             if "RU=" in href:
                 try:
@@ -91,37 +104,60 @@ class TopicLeadScraper:
 
         return results
 
-    def scrape_business_contacts(self, website: str, max_pages: int = 15) -> List[ContactFinding]:
-        """Scrape the website and its internal subpages for business-safe emails."""
+    def scrape_business_contacts(self, website: str, max_pages: int = 1500) -> Tuple[List[ContactFinding], List[str]]:
+        """Scrape the website and its internal subpages entirely for business-safe emails, and discover external business links."""
         from urllib.parse import urldefrag
-        
+
         parsed_base = urlparse(website)
         base_domain = parsed_base.netloc.lower().replace("www.", "")
-        
+
         findings: List[ContactFinding] = []
         seen_emails: Set[str] = set()
         
+        external_domains_found: Set[str] = set()
+        
+        # Domains to ignore when recursively exploring external websites
+        blacklisted_domains = {
+            "google.com", "facebook.com", "linkedin.com", "twitter.com", "x.com",
+            "instagram.com", "youtube.com", "apple.com", "microsoft.com", "amazon.com",
+            "tiktok.com", "pinterest.com", "snapchat.com", "reddit.com", "whatsapp.com",
+            "duckduckgo.com", "yahoo.com", "bing.com", "wikipedia.org", "adobe.com",
+            "github.com", "w3.org", "medium.com", "vimeo.com", "tumblr.com"
+        }
+
         queue = [website]
         visited = set()
-        
+
         logger.info("Deep scraping starting at %s (max %d pages)", website, max_pages)
-        
+
+        def get_priority(url: str) -> int:
+            """Prioritize URLs containing key staff/directory terms so they are crawled first."""
+            score = 0
+            slr = url.lower()
+            important_keywords = ["staff", "team", "about", "contact", "people", "direct", "leader", "board", "management"]
+            if any(k in slr for k in important_keywords):
+                score -= 10
+            # De-prioritize things like generic blog posts or privacy policies if needed
+            if "privacy" in slr or "terms" in slr:
+                score += 10
+            return score
+
         while queue and len(visited) < max_pages:
             current_url = queue.pop(0)
             current_url, _ = urldefrag(current_url) # Strip #fragments
-            
+
             if current_url in visited:
                 continue
             visited.add(current_url)
-            
+
             try:
                 res = self.session.get(current_url, timeout=self.timeout)
                 if res.status_code >= 400 or not res.text:
                     continue
 
                 soup = BeautifulSoup(res.text, "html.parser")
-                
-                # Check for emails
+
+                # Check for emails natively in RAW text (finds everything hidden)
                 emails_dict = self._extract_emails(res.text, soup)
                 for email in emails_dict:
                     if email in seen_emails:
@@ -130,32 +166,46 @@ class TopicLeadScraper:
                     if maybe_finding:
                         findings.append(maybe_finding)
                         seen_emails.add(email)
-                
+
                 # Find new internal links to crawl
+                new_links_found = False
                 for link in soup.find_all("a", href=True):
                     next_url = urljoin(current_url, link["href"])
                     parsed_next = urlparse(next_url)
-                    
+
                     if parsed_next.scheme not in ("http", "https"):
                         continue
-                        
+
                     next_domain = parsed_next.netloc.lower().replace("www.", "")
-                    
+                    if not next_domain:
+                        continue
+
                     # Only queue internal subpages
                     if next_domain == base_domain:
                         clean_next, _ = urldefrag(next_url)
                         if clean_next not in visited and clean_next not in queue:
                             queue.append(clean_next)
+                            new_links_found = True
+                    else:
+                        # Map out external links to turn this into a recursive web tree
+                        found_root_domain = ".".join(next_domain.split('.')[-2:]) # naive e.g., company.com
+                        if found_root_domain and found_root_domain not in blacklisted_domains:
+                            external_url = f"https://{next_domain}"
+                            external_domains_found.add(external_url)
+
+                # Re-sort queue to ensure priority pages are hit first
+                if new_links_found:
+                    queue.sort(key=get_priority)
 
                 time.sleep(self.request_delay)
             except Exception:
                 continue
 
-        return findings
+        return findings, list(external_domains_found)
 
     def _extract_emails(self, html: str, soup: BeautifulSoup) -> dict[str, str | None]:
         found: dict[str, str | None] = {}
-        
+
         # Scrape all raw emails from HTML using regex
         for raw_email in EMAIL_RE.findall(html):
             clean_email = raw_email.lower()
@@ -171,11 +221,11 @@ class TopicLeadScraper:
                 if EMAIL_RE.match(email_part):
                     clean_email = email_part
                     text_content = node.get_text(strip=True)
-                    
+
                     # Only assign if the text content isn't just the email itself
                     if text_content and "@" not in text_content:
                         found[clean_email] = text_content
-                        
+
         return found
 
     def _classify_business_email(self, email: str, source_url: str) -> ContactFinding | None:

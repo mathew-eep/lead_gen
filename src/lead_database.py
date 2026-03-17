@@ -41,6 +41,7 @@ class LeadDatabase:
                 """
                 CREATE TABLE IF NOT EXISTS contacts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    topic TEXT NOT NULL,
                     company_website TEXT NOT NULL,
                     email TEXT NOT NULL,
                     source_url TEXT NOT NULL,
@@ -98,33 +99,24 @@ class LeadDatabase:
 
     def add_contact(
         self,
+        topic: str,
         company_website: str,
         email: str,
         source_url: str,
     ) -> bool:
         try:
             with sqlite3.connect(self.db_path) as conn:
-                # If table already existed with old schema, columns might still be there but not required.
-                # However, since we removed the columns in the CREATE statement, we just insert into the core 3.
                 try:
                     conn.execute(
                         """
                         INSERT OR IGNORE INTO contacts (
-                            company_website, email, source_url
-                        ) VALUES (?, ?, ?)
+                            topic, company_website, email, source_url
+                        ) VALUES (?, ?, ?, ?)
                         """,
-                        (company_website, email.lower(), source_url),
+                        (topic, company_website, email.lower(), source_url),
                     )
                 except sqlite3.OperationalError:
-                    # Fallback for if the old schema still exists in the local database file and requires 'contact_type'
-                    conn.execute(
-                        """
-                        INSERT OR IGNORE INTO contacts (
-                            company_website, email, contact_type, source_url, confidence
-                        ) VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (company_website, email.lower(), "general", source_url, 1.0),
-                    )
+                    pass
                 
                 conn.commit()
                 return conn.total_changes > 0
@@ -196,9 +188,9 @@ class LeadDatabase:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
-                SELECT company_website, email, contact_type, source_url, confidence, created_at
+                SELECT topic, company_website, email, source_url, created_at
                 FROM contacts
-                ORDER BY confidence DESC, created_at DESC
+                ORDER BY created_at DESC
                 LIMIT ?
                 """,
                 (limit,),

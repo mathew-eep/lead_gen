@@ -29,12 +29,12 @@ class LeadCollector:
 
     def __init__(
         self,
-        topic: str,
+        topics: list[str],
         db_path: str = "./data/leads.db",
         run_every_minutes: int = 30,
         max_sites_per_run: int = 20,
     ) -> None:
-        self.topic = topic
+        self.topics = topics
         self.run_every_minutes = run_every_minutes
         self.max_sites_per_run = max_sites_per_run
 
@@ -42,32 +42,106 @@ class LeadCollector:
         self.scraper = TopicLeadScraper()
         self.logger = logging.getLogger(__name__)
 
+    def fetch_dynamic_topic(self) -> str:
+        """Fetch a highly random business industry from a vast corpus, including location factors."""
+        import random
+        try:
+            from faker import Faker
+            fake = Faker()
+            
+            # Generate a job or industry
+            job = fake.job()
+            
+            # Clean up complex job titles (e.g. "Engineer, civil (consulting)" -> "Civil Engineer")
+            if "(" in job:
+                job = job.split("(")[0].strip()
+            if ", " in job:
+                parts = job.split(", ")
+                if len(parts) == 2:
+                    job = f"{parts[1]} {parts[0]}"
+            
+            # Gather location factors
+            city = fake.city()
+            state = fake.state_abbr()
+            
+            # Compose powerful search variations targeting different parameters
+            variations = [
+                f"{job} companies in {city}, {state}",
+                f"{job} services in {state}",
+                f"{job} agencies near {city}",
+                f"{job} contractors in {state}",
+                f"{job} consultants {city}",
+                f"{job} firms in {state}"
+            ]
+            
+            # Add some purely industry-wide generic searches (sometimes we just want the highest ranking ones across the board)
+            try:
+                import requests
+                res = requests.get("https://raw.githubusercontent.com/dariusk/corpora/master/data/corporations/industries.json", timeout=2)
+                if res.status_code == 200:
+                    ind = random.choice(res.json().get("industries", []))
+                    variations.extend([
+                        f"{ind} companies in {city}",
+                        f"{ind} startups in {state}"
+                    ])
+            except Exception:
+                pass
+                
+            return random.choice(variations)
+        except Exception as exc:
+            self.logger.warning("Dynamic topic generation failed: %s. Falling back to default list.", exc)
+            return random.choice(["software startups in Texas", "marketing agencies in NY", "construction firms in CA"])
+
     def run_once(self) -> None:
-        run_id = self.db.start_run(self.topic)
+        import random
+        
+        if "DYNAMIC" in self.topics:
+            current_topic = self.fetch_dynamic_topic()
+        else:
+            # Pick a random topic from the given list
+            current_topic = random.choice(self.topics)
+
+        run_id = self.db.start_run(current_topic)
         companies_added = 0
         contacts_added = 0
 
         try:
-            sites = self.scraper.discover_websites(self.topic, max_sites=self.max_sites_per_run)
+            site_queue = self.scraper.discover_websites(current_topic, max_sites=self.max_sites_per_run)
+            
+            from lead_scraper import CandidateSite
+            seen_sites = set([s.website for s in site_queue])
+            sites_crawled = 0
 
-            for site in sites:
+            while site_queue and sites_crawled < self.max_sites_per_run:
+                site = site_queue.pop(0)
+                sites_crawled += 1
+                
+                self.logger.info("Processing site %d/%d: %s", sites_crawled, self.max_sites_per_run, site.website)
+                
                 if self.db.add_company(
-                    topic=self.topic,
+                    topic=current_topic,
                     website=site.website,
                     name=None,
                     source_url=site.source_url,
                 ):
                     companies_added += 1
 
-                findings = self.scraper.scrape_business_contacts(site.website)
+                findings, external_domains = self.scraper.scrape_business_contacts(site.website)
                 for finding in findings:
                     added = self.db.add_contact(
+                        topic=current_topic,
                         company_website=site.website,
                         email=finding.email,
                         source_url=finding.source_url,
                     )
                     if added:
                         contacts_added += 1
+                
+                # Append purely new, organically discovered external business partners to the back of the tree queue
+                for ext_domain in external_domains:
+                    if ext_domain not in seen_sites:
+                        seen_sites.add(ext_domain)
+                        site_queue.append(CandidateSite(website=ext_domain, source_url=site.website))
 
             self.db.finish_run(
                 run_id,
@@ -77,7 +151,7 @@ class LeadCollector:
             )
             self.logger.info(
                 "Run complete | topic='%s' new_companies=%d new_contacts=%d",
-                self.topic,
+                current_topic,
                 companies_added,
                 contacts_added,
             )
@@ -92,7 +166,7 @@ class LeadCollector:
             self.logger.error("Run failed: %s", exc)
 
     def start_forever(self) -> None:
-        self.logger.info("Starting lead collector for topic '%s'", self.topic)
+        self.logger.info("Starting lead collector for topics: %s", self.topics)
         self.logger.info(
             "Schedule: every %d minute(s), max %d sites/run",
             self.run_every_minutes,
