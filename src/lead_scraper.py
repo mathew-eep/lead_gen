@@ -37,17 +37,17 @@ class TopicLeadScraper:
         self.session = requests.Session()
         self.session.headers.update(
             {
-                "User-Agent": (
-                    "Mozilla/5.0 (compatible; CompliantLeadCollector/1.0; "
-                    "+https://example.local/bot-policy)"
-                )
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
             }
         )
 
     def discover_websites(self, topic: str, max_sites: int = 25) -> List[CandidateSite]:
-        """Use DuckDuckGo HTML results to find topical public websites."""
+        """Use a search engine to find topical public websites."""
+        # Using Yahoo search for better compatibility with automated scrapers
         query = f"{topic} company official site"
-        url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
+        url = f"https://search.yahoo.com/search?p={quote_plus(query)}&n={max_sites + 10}"
         logger.info("Searching for topic websites: %s", topic)
 
         try:
@@ -61,10 +61,21 @@ class TopicLeadScraper:
         results = []
         seen_domains: Set[str] = set()
 
-        for link in soup.select("a.result__a"):
+        from urllib.parse import unquote
+
+        for link in soup.select(".algo a"):
             href = link.get("href", "").strip()
+            
+            # Yahoo wraps links in a redirect (e.g., .../RU=https%3a%2f%2f.../RK=...)
+            if "RU=" in href:
+                try:
+                    href = unquote(href.split("RU=")[1].split("/")[0])
+                except IndexError:
+                    continue
+
             if not href.startswith("http"):
                 continue
+
             parsed = urlparse(href)
             domain = parsed.netloc.lower().replace("www.", "")
             if not domain or domain in seen_domains:
