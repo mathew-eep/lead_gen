@@ -117,6 +117,28 @@ class TopicLeadScraper:
 
         return results
 
+    def _extract_emails_dynamic(self, url: str) -> dict[str, str | None]:
+        """Use Playwright to render JS and extract emails from the fully rendered page."""
+        if not PLAYWRIGHT_AVAILABLE:
+            return {}
+        async def run():
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                try:
+                    await page.goto(url, timeout=self.timeout * 1000)
+                    html = await page.content()
+                    soup = BeautifulSoup(html, "html.parser")
+                    return self._extract_emails(html, soup)
+                except Exception:
+                    return {}
+                finally:
+                    await browser.close()
+        try:
+            return asyncio.run(run())
+        except Exception:
+            return {}
+
     def scrape_business_contacts(self, website: str, max_pages: int = 30) -> Tuple[List[ContactFinding], List[str]]:
         """Scrape the website and its internal subpages for business-safe emails, and discover external business links."""
         from urllib.parse import urldefrag
@@ -138,7 +160,14 @@ class TopicLeadScraper:
             "github.com", "w3.org", "medium.com", "vimeo.com", "tumblr.com"
         }
 
+        # Always queue high-priority subpages for crawling
+        priority_paths = ["/contact", "/contact.php", "/contact-us", "/about", "/about-us", "/team", "/staff", "/directory"]
         queue = [website]
+        from urllib.parse import urljoin
+        for path in priority_paths:
+            candidate_url = urljoin(website, path)
+            if candidate_url not in queue:
+                queue.append(candidate_url)
         visited = set()
 
         logger.info("Deep scraping starting at %s (max %d pages)", website, max_pages)
@@ -172,6 +201,12 @@ class TopicLeadScraper:
 
                 # Check for emails natively in RAW text (finds everything hidden)
                 emails_dict = self._extract_emails(res.text, soup)
+                # If no emails found and this is a high-priority subpage, try Playwright
+                if not emails_dict and PLAYWRIGHT_AVAILABLE:
+                    for key in ["contact", "staff", "team", "about", "directory"]:
+                        if key in current_url:
+                            emails_dict = self._extract_emails_dynamic(current_url)
+                            break
                 for email in emails_dict:
                     if email in seen_emails:
                         continue
@@ -244,6 +279,21 @@ class TopicLeadScraper:
                     if text_content and "@" not in text_content:
                         found[clean_email] = text_content
 
+        # Obfuscated email patterns (e.g. info [at] domain [dot] com, info (at) domain (dot) com)
+        obfuscated_re = re.compile(r"([A-Za-z0-9._%+-]+)\s*[\[\(]?at[\]\)]?\s*([A-Za-z0-9.-]+)\s*[\[\(]?dot[\]\)]?\s*([A-Za-z]{2,})", re.IGNORECASE)
+        for match in obfuscated_re.findall(html):
+            email = f"{match[0]}@{match[1]}.{match[2]}"
+            if email not in found:
+                found[email] = None
+
+        # Handle emails split by spans or with extra spaces (e.g., 'john . doe @ domain . com')
+        text = soup.get_text(separator=" ", strip=True)
+        split_email_re = re.compile(r"([A-Za-z0-9._%+-]+)\s*\.\s*([A-Za-z0-9._%+-]+)\s*@\s*([A-Za-z0-9.-]+)\s*\.\s*([A-Za-z]{2,})", re.IGNORECASE)
+        for match in split_email_re.findall(text):
+            email = f"{match[0]}.{match[1]}@{match[2]}.{match[3]}"
+            if email not in found:
+                found[email] = None
+
         return found
 
     def _classify_business_email(self, email: str, source_url: str) -> ContactFinding | None:
@@ -251,3 +301,10 @@ class TopicLeadScraper:
             email=email,
             source_url=source_url,
         )
+
+import asyncio
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
