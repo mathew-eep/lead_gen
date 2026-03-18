@@ -49,11 +49,11 @@ class TopicLeadScraper:
 
         # Introduce variety in the search query to pull different results per run
         query_variants = [
-            f'"{topic}" company official site',
-            f'{topic} businesses "contact us"',
-            f'"{topic}" services agency',
-            f'top {topic} companies',
-            f'{topic} firm "about us"'
+            f'{topic} official website',
+            f'{topic} "contact us"',
+            f'{topic} directory',
+            f'top {topic} independent',
+            f'{topic} "about us"'
         ]
 
         # We can also paginate randomly through the first 50 results (b parameter in Yahoo)
@@ -93,8 +93,15 @@ class TopicLeadScraper:
             domain = parsed.netloc.lower().replace("www.", "")
             if not domain or domain in seen_domains:
                 continue
-            # Skip directory-style domains that usually do not host contacts.
-            if domain.endswith("linkedin.com") or domain.endswith("facebook.com"):
+                
+            # Skip massive generic directories or social platforms
+            skip_terms = {
+                "linkedin.com", "facebook.com", "instagram.com", "twitter.com", "x.com", 
+                "youtube.com", "pinterest.com", "reddit.com", "yelp.com", "yellowpages.com", 
+                "bbb.org", "wikipedia.org", "yahoo.com", "aol.com", "vk.com", "nytimes.com", 
+                "tripadvisor.", "glassdoor.", "trustpilot.", "forbes.com", "indeed.com"
+            }
+            if any(term in domain for term in skip_terms):
                 continue
 
             seen_domains.add(domain)
@@ -104,8 +111,8 @@ class TopicLeadScraper:
 
         return results
 
-    def scrape_business_contacts(self, website: str, max_pages: int = 1500) -> Tuple[List[ContactFinding], List[str]]:
-        """Scrape the website and its internal subpages entirely for business-safe emails, and discover external business links."""
+    def scrape_business_contacts(self, website: str, max_pages: int = 30) -> Tuple[List[ContactFinding], List[str]]:
+        """Scrape the website and its internal subpages for business-safe emails, and discover external business links."""
         from urllib.parse import urldefrag
 
         parsed_base = urlparse(website)

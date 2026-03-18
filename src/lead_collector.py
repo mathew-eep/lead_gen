@@ -60,15 +60,26 @@ class LeadCollector:
                 if len(parts) == 2:
                     job = f"{parts[1]} {parts[0]}"
             
-            # Gather location factors
-            city = fake.city()
+            # Gather real location factors
+            real_cities = [
+                "New York", "Los Angeles", "Chicago", "Houston", "Phoenix", 
+                "Philadelphia", "San Antonio", "San Diego", "Dallas", "Austin",
+                "San Jose", "Fort Worth", "Jacksonville", "Columbus", "Charlotte",
+                "Indianapolis", "San Francisco", "Seattle", "Denver", "Washington",
+                "Boston", "El Paso", "Nashville", "Portland", "Las Vegas", "Detroit",
+                "Memphis", "Louisville", "Baltimore", "Milwaukee", "Albuquerque",
+                "Tucson", "Fresno", "Sacramento", "Atlanta", "Kansas City", "Miami",
+                "Raleigh", "Omaha", "Oakland", "Minneapolis", "Tulsa", "Cleveland",
+                "Wichita", "New Orleans", "Arlington", "Tampa", "Orlando", "Irvine"
+            ]
+            city = random.choice(real_cities)
             state = fake.state_abbr()
             
-            # Compose powerful search variations targeting different parameters
+            # Compose powerful search variations with real locations only
             variations = [
-                f"{job} companies in {city}, {state}",
+                f"{job} companies in {city}",
                 f"{job} services in {state}",
-                f"{job} agencies near {city}",
+                f"{job} agencies in {city}",
                 f"{job} contractors in {state}",
                 f"{job} consultants {city}",
                 f"{job} firms in {state}"
