@@ -215,7 +215,12 @@ class TopicLeadScraper:
 
         # Scrape all raw emails from HTML using regex
         for raw_email in EMAIL_RE.findall(html):
-            clean_email = raw_email.lower()
+            clean_email = raw_email.lower().strip()
+            
+            # Skip invalid email structures often caught by open regexes (images, webp, etc.)
+            if any(clean_email.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".css", ".js"]):
+                continue
+                
             if clean_email not in found:
                 found[clean_email] = None
 
