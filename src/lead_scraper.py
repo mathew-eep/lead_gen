@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Set, Tuple
 from urllib.parse import quote_plus, urljoin, urlparse
 
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -34,14 +34,12 @@ class TopicLeadScraper:
     def __init__(self, timeout: int = 20, request_delay: float = 1.5) -> None:
         self.timeout = timeout
         self.request_delay = request_delay
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-            }
-        )
+        
+        # Powerfully bounce between completely different browser TLS fingerprints and header signatures
+        import random
+        browser_targets = ["chrome110", "chrome120", "safari15_3", "safari17_0", "edge101"]
+        
+        self.session = requests.Session(impersonate=random.choice(browser_targets))
 
     def discover_websites(self, topic: str, max_sites: int = 25) -> List[CandidateSite]:
         """Use a search engine to find topical public websites."""
@@ -51,13 +49,14 @@ class TopicLeadScraper:
         query_variants = [
             f'{topic} official website',
             f'{topic} "contact us"',
-            f'{topic} directory',
+            f'{topic} location',
             f'top {topic} independent',
             f'{topic} "about us"'
         ]
 
-        # We can also paginate randomly through the first 50 results (b parameter in Yahoo)
-        random_page_offset = random.choice([1, 11, 21, 31, 41])
+        # We paginate carefully through the first 20 results (b parameter in Yahoo)
+        # Niche queries turn into pure garbage after page 2 on Yahoo, so we stick to 1 or 11
+        random_page_offset = random.choice([1, 11])
         chosen_query = random.choice(query_variants)
 
         url = f"https://search.yahoo.com/search?p={quote_plus(chosen_query)}&n={max_sites + 10}&b={random_page_offset}"
@@ -99,7 +98,9 @@ class TopicLeadScraper:
                 "linkedin.com", "facebook.com", "instagram.com", "twitter.com", "x.com", 
                 "youtube.com", "pinterest.com", "reddit.com", "yelp.com", "yellowpages.com", 
                 "bbb.org", "wikipedia.org", "yahoo.com", "aol.com", "vk.com", "nytimes.com", 
-                "tripadvisor.", "glassdoor.", "trustpilot.", "forbes.com", "indeed.com"
+                "tripadvisor.", "glassdoor.", "trustpilot.", "forbes.com", "indeed.com",
+                "clutch.co", "upcity.com", "angi.com", "thumbtack.com", "expertise.com",
+                "zoominfo.com", "crunchbase.com", "g2.com", "capterra.com", "bloomberg.com"
             }
             if any(term in domain for term in skip_terms):
                 continue
