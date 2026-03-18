@@ -11,6 +11,11 @@ from urllib.parse import quote_plus, urljoin, urlparse
 
 from curl_cffi import requests
 from bs4 import BeautifulSoup
+import warnings
+from bs4 import XMLParsedAsHTMLWarning
+
+# Suppress noisy BeautifulSoup XML/HTML warnings when we inevitably hit a broken company sitemap/XML feed
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 logger = logging.getLogger(__name__)
 

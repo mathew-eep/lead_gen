@@ -75,8 +75,15 @@ class LeadCollector:
             city = random.choice(real_cities)
             state = fake.state_abbr()
             
-            # Compose powerful search variations with real locations only
+            # Compose powerful search variations with real locations only, favoring small businesses
+            smallbiz_keywords = ["small", "local", "independent", "family-owned", "boutique", "private"]
             variations = [
+                f"{job} small business in {city}",
+                f"{job} local company in {city}",
+                f"{job} independent firm in {city}",
+                f"{job} family-owned business in {city}",
+                f"{job} boutique agency in {city}",
+                f"{job} private contractor in {city}",
                 f"{job} companies in {city}",
                 f"{job} services in {state}",
                 f"{job} agencies in {city}",
@@ -84,6 +91,11 @@ class LeadCollector:
                 f"{job} consultants {city}",
                 f"{job} firms in {state}"
             ]
+            # Add some random small business keyword combos
+            for kw in smallbiz_keywords:
+                variations.append(f"{job} {kw} business in {city}")
+                variations.append(f"{job} {kw} agency in {city}")
+                variations.append(f"{job} {kw} services in {state}")
             
             # Add some purely industry-wide generic searches (sometimes we just want the highest ranking ones across the board)
             try:
