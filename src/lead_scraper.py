@@ -199,21 +199,23 @@ class TopicLeadScraper:
 
                 soup = BeautifulSoup(res.text, "html.parser")
 
-                # Check for emails natively in RAW text (finds everything hidden)
                 emails_dict = self._extract_emails(res.text, soup)
-                # If no emails found and this is a high-priority subpage, try Playwright
                 if not emails_dict and PLAYWRIGHT_AVAILABLE:
                     for key in ["contact", "staff", "team", "about", "directory"]:
                         if key in current_url:
                             emails_dict = self._extract_emails_dynamic(current_url)
                             break
                 for email in emails_dict:
+                    logger.debug(f"Processing email: {email} from {current_url}")
                     if email in seen_emails:
+                        logger.debug(f"Skipping duplicate email: {email}")
                         continue
                     maybe_finding = self._classify_business_email(email, current_url)
+                    logger.debug(f"Classified finding: {maybe_finding}")
                     if maybe_finding:
                         findings.append(maybe_finding)
                         seen_emails.add(email)
+                        logger.info(f"Added contact: {email} from {current_url}")
 
                 # Find new internal links to crawl
                 new_links_found = False
@@ -253,15 +255,16 @@ class TopicLeadScraper:
 
     def _extract_emails(self, html: str, soup: BeautifulSoup) -> dict[str, str | None]:
         found: dict[str, str | None] = {}
+        logger.debug(f"Extracting emails from HTML length={len(html)}")
 
         # Scrape all raw emails from HTML using regex
         for raw_email in EMAIL_RE.findall(html):
             clean_email = raw_email.lower().strip()
-            
+            logger.debug(f"Found raw email: {clean_email}")
             # Skip invalid email structures often caught by open regexes (images, webp, etc.)
             if any(clean_email.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".css", ".js"]):
+                logger.debug(f"Skipping invalid email: {clean_email}")
                 continue
-                
             if clean_email not in found:
                 found[clean_email] = None
 
@@ -269,31 +272,32 @@ class TopicLeadScraper:
         for node in soup.find_all("a", href=True):
             href = node.get("href", "").strip().lower()
             if href.startswith("mailto:"):
-                # Clean up "mailto:" prefix and any "?subject=" parameters
                 email_part = href[7:].split("?")[0].strip()
+                logger.debug(f"Found mailto email: {email_part}")
                 if EMAIL_RE.match(email_part):
                     clean_email = email_part
                     text_content = node.get_text(strip=True)
-
-                    # Only assign if the text content isn't just the email itself
                     if text_content and "@" not in text_content:
                         found[clean_email] = text_content
 
-        # Obfuscated email patterns (e.g. info [at] domain [dot] com, info (at) domain (dot) com)
+        # Obfuscated email patterns
         obfuscated_re = re.compile(r"([A-Za-z0-9._%+-]+)\s*[\[\(]?at[\]\)]?\s*([A-Za-z0-9.-]+)\s*[\[\(]?dot[\]\)]?\s*([A-Za-z]{2,})", re.IGNORECASE)
         for match in obfuscated_re.findall(html):
             email = f"{match[0]}@{match[1]}.{match[2]}"
+            logger.debug(f"Found obfuscated email: {email}")
             if email not in found:
                 found[email] = None
 
-        # Handle emails split by spans or with extra spaces (e.g., 'john . doe @ domain . com')
+        # Handle emails split by spans or with extra spaces
         text = soup.get_text(separator=" ", strip=True)
         split_email_re = re.compile(r"([A-Za-z0-9._%+-]+)\s*\.\s*([A-Za-z0-9._%+-]+)\s*@\s*([A-Za-z0-9.-]+)\s*\.\s*([A-Za-z]{2,})", re.IGNORECASE)
         for match in split_email_re.findall(text):
             email = f"{match[0]}.{match[1]}@{match[2]}.{match[3]}"
+            logger.debug(f"Found split email: {email}")
             if email not in found:
                 found[email] = None
 
+        logger.debug(f"Total emails found: {list(found.keys())}")
         return found
 
     def _classify_business_email(self, email: str, source_url: str) -> ContactFinding | None:
